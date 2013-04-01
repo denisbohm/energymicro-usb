@@ -190,8 +190,16 @@ USB_Status_TypeDef USBDHAL_CoreInit( uint32_t totalRxFifoSize,
   USBD_Ep_TypeDef *ep;
 
   CMU_ClockEnable( cmuClock_GPIO, true );
+//  GPIO_PinModeSet( gpioPortF, 5, gpioModePushPull, 0 ); /* Enable VBUSEN pin */
+//  USB->ROUTE = USB_ROUTE_PHYPEN | USB_ROUTE_VBUSENPEN;  /* Init PHY          */
+// Modified to only use port F pin 5 in host mode.
+// -Denis Bohm (denis@fireflydesign.com)
+#ifdef USB_HOST
   GPIO_PinModeSet( gpioPortF, 5, gpioModePushPull, 0 ); /* Enable VBUSEN pin */
   USB->ROUTE = USB_ROUTE_PHYPEN | USB_ROUTE_VBUSENPEN;  /* Init PHY          */
+#else
+  USB->ROUTE = USB_ROUTE_PHYPEN;  /* Init PHY          */
+#endif
 
   USBHAL_CoreReset();                                   /* Reset USB core    */
 
