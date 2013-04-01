@@ -200,7 +200,7 @@ extern "C" {
 /** Macro for creating USB compliant UTF-16LE UNICODE string descriptors.
  *  @n Example: STATIC_CONST_STRING_DESC( iManufacturer, L"Energy Micro AS" );
  */
-
+/*
 #define STATIC_CONST_STRING_DESC( name, value )  \
 typedef struct                      \
 {                                   \
@@ -216,6 +216,29 @@ static const _##name name __attribute__ ((aligned(4)))= \
   .type = USB_STRING_DESCRIPTOR,    \
   .name = value                     \
 }                                   \
+EFM32_PACK_END()
+*/
+
+// Modified string descriptor functions to work with gcc without using any special command line options.
+// -Denis Bohm (denis@fireflydesign.com)
+
+typedef uint16_t utf16_t;
+
+#define STATIC_CONST_STRING_DESC( name, ... ) \
+typedef struct \
+{ \
+uint8_t len; \
+uint8_t type; \
+utf16_t name[sizeof((utf16_t[]) __VA_ARGS__ )/2]; \
+} __attribute__ ((packed)) _##name; \
+EFM32_ALIGN( 4 ) \
+EFM32_PACK_START( 1 ) \
+static const _##name name __attribute__ ((aligned(4)))= \
+{ \
+.len = sizeof((utf16_t[]) __VA_ARGS__ ), \
+.type = USB_STRING_DESCRIPTOR, \
+.name = __VA_ARGS__ \
+} \
 EFM32_PACK_END()
 
 /** Macro for creating USB compliant language string descriptors.
