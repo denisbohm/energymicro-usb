@@ -2,7 +2,7 @@
  * @file
  * @brief USB protocol stack library, low level USB peripheral access.
  * @author Energy Micro AS
- * @version 3.0.2
+ * @version 3.20.2
  *******************************************************************************
  * @section License
  * <b>(C) Copyright 2012 Energy Micro AS, http://www.energymicro.com</b>
@@ -130,7 +130,7 @@ __STATIC_INLINE void USBDHAL_SetEPDISNAK( USBD_Ep_TypeDef *ep );
 USB_Status_TypeDef USBHHAL_CoreInit( const uint32_t rxFifoSize,
                                      const uint32_t nptxFifoSize,
                                      const uint32_t ptxFifoSize );
-void USBHHAL_HCHalt(  int hcnum, uint32_t hcchar, uint32_t eptype );
+void USBHHAL_HCHalt(  int hcnum, uint32_t hcchar );
 void USBHHAL_HCInit(  int hcnum );
 void USBHHAL_HCStart( int hcnum );
 #endif /* defined( USB_HOST ) */
@@ -167,116 +167,9 @@ __STATIC_INLINE uint32_t USBHAL_GetCoreInts( void )
   return retVal;
 }
 
-__STATIC_INLINE void USBHAL_ReadFifo( uint8_t *dest, uint16_t byteCount )
-{
-#if 0
-  int words, i;
-#else
-  int words, loops;
-#endif
-
-  uint32_t *data;
-  __IO uint32_t *fifo;
-
-  words = (byteCount + 3) / 4;
-  data  = (uint32_t*)dest;
-  fifo  = USB->FIFO0D;
-
-#if 0
-  for ( i=0; i<words; i++ )
-  {
-    *data++ = *fifo;
-  }
-#else
-  /* Duff's Device ! */
-  loops = ( words + 7 ) / 8;
-  switch( words % 8)
-  {
-    case 0: do
-            {
-              *data++ = *fifo;
-    case 7:   *data++ = *fifo;
-    case 6:   *data++ = *fifo;
-    case 5:   *data++ = *fifo;
-    case 4:   *data++ = *fifo;
-    case 3:   *data++ = *fifo;
-    case 2:   *data++ = *fifo;
-    case 1:   *data++ = *fifo;
-            } while ( --loops );
-  }
-#endif
-}
-
-__STATIC_INLINE void USBHAL_FlushFifo( uint16_t byteCount )
-{
-  int words, loops;
-  __IO uint32_t *fifo;
-
-  words = (byteCount + 3) / 4;
-  fifo  = USB->FIFO0D;
-
-  /* Duff's Device ! */
-  loops = ( words + 7 ) / 8;
-  switch( words % 8)
-  {
-    case 0: do
-            {
-              *fifo;
-    case 7:   *fifo;
-    case 6:   *fifo;
-    case 5:   *fifo;
-    case 4:   *fifo;
-    case 3:   *fifo;
-    case 2:   *fifo;
-    case 1:   *fifo;
-            } while ( --loops );
-  }
-}
-
 __STATIC_INLINE bool USBHAL_VbusIsOn( void )
 {
   return ( USB->STATUS & USB_STATUS_VREGOS ) != 0;
-}
-
-__STATIC_INLINE void USBHAL_WriteFifo( int epnum, uint8_t *src,
-                                        uint16_t byteCount )
-{
-#if 0
-  int words, i;
-#else
-  int words, loops;
-#endif
-
-  uint32_t *data;
-  __IO uint32_t *fifo;
-
-  words = (byteCount + 3) / 4;
-  data  = (uint32_t*)src;
-  fifo  = USB_FIFOS[ epnum ];
-
-#if 0
-  for ( i=0; i<words; i++ )
-  {
-    *fifo = *data++;
-  }
-#else
-  /* Duff's Device ! */
-  loops = ( words + 7 ) / 8;
-  switch( words % 8)
-  {
-    case 0: do
-            {
-              *fifo = *data++;
-    case 7:   *fifo = *data++;
-    case 6:   *fifo = *data++;
-    case 5:   *fifo = *data++;
-    case 4:   *fifo = *data++;
-    case 3:   *fifo = *data++;
-    case 2:   *fifo = *data++;
-    case 1:   *fifo = *data++;
-            } while ( --loops );
-  }
-#endif
 }
 
 #if defined( USB_DEVICE )
@@ -380,9 +273,6 @@ __STATIC_INLINE void USBDHAL_EnableInts( USBD_Device_TypeDef *dev )
   USB->GINTSTS = 0xFFFFFFFF;
 
   mask = USB_GINTMSK_USBSUSPMSK     |
-#if defined( USB_SLAVEMODE )
-         USB_GINTMSK_RXFLVLMSK      |
-#endif
          USB_GINTMSK_USBRSTMSK      |
          USB_GINTMSK_ENUMDONEMSK    |
          USB_GINTMSK_IEPINTMSK      |
@@ -412,10 +302,8 @@ __STATIC_INLINE void USBDHAL_Ep0Activate( void )
 {
   USB->DCTL = ( USB->DCTL & ~DCTL_WO_BITMASK ) | USB_DCTL_CGNPINNAK;
 
-#if !defined( USB_SLAVEMODE )
   USB->DOEP0CTL = ( USB->DOEP0CTL & ~DEPCTL_WO_BITMASK ) |
                   USB_DOEP_CTL_CNAK | USB_DOEP_CTL_EPENA;
-#endif
 }
 
 __STATIC_INLINE bool USBDHAL_EpIsStalled( USBD_Ep_TypeDef *ep )
@@ -429,42 +317,6 @@ __STATIC_INLINE bool USBDHAL_EpIsStalled( USBD_Ep_TypeDef *ep )
   }
   return retVal;
 }
-
-#if defined( USB_SLAVEMODE )
-__STATIC_INLINE void USBDHAL_FillFifo( USBD_Ep_TypeDef *ep )
-{
-  uint32_t len, words, fifoSpace;
-
-  for( ;; )
-  {
-    len = EFM32_MIN( ep->remaining, ep->packetSize );
-    words = (len + 3) / 4;
-    fifoSpace = USB_DINEPS[ ep->num ].TXFSTS & _USB_DIEP_TXFSTS_SPCAVAIL_MASK;
-
-    if  ( ( fifoSpace >= words ) && len )
-    {
-      USBHAL_WriteFifo( ep->num, ep->buf, len );
-      ep->xferred   += len;
-      ep->remaining -= len;
-      ep->buf       += len;
-      if ( ep->num == 0 )
-      {
-        break;
-      }
-    }
-    else
-    {
-      break;
-    }
-  }
-
-  if ( len == 0 )
-  {
-    /* Disable Tx FIFO empty interrupt */
-    USB->DIEPEMPMSK &= ~ep->mask;
-  }
-}
-#endif
 
 __STATIC_INLINE uint32_t USBDHAL_GetAllInEpInts( void )
 {
@@ -487,15 +339,8 @@ __STATIC_INLINE uint32_t USBDHAL_GetAllOutEpInts( void )
 __STATIC_INLINE uint32_t USBDHAL_GetInEpInts( USBD_Ep_TypeDef *ep )
 {
   uint32_t retVal, msk;
-#if defined( USB_SLAVEMODE )
-  uint32_t emp;
-#endif
 
-  msk  = USB->DIEPMSK;
-#if defined( USB_SLAVEMODE )
-  emp  = USB->DIEPEMPMSK;
-  msk |= ((emp >> ep->num) & 0x1) << 7;
-#endif
+  msk    = USB->DIEPMSK;
   retVal = USB_DINEPS[ ep->num ].INT;
 
   return retVal & msk;
@@ -545,12 +390,7 @@ __STATIC_INLINE USB_Status_TypeDef USBDHAL_GetStallStatusEp(
 __STATIC_INLINE void USBDHAL_ReenableEp0Setup( USBD_Device_TypeDef *dev )
 
 {
-#if !defined( USB_SLAVEMODE )
   USB->DOEP0DMAADDR = (uint32_t)dev->setupPkt;
-#else
-  (void)dev;
-#endif
-
   USB->DOEP0CTL = ( USB->DOEP0CTL & ~DEPCTL_WO_BITMASK ) | USB_DOEP_CTL_EPENA;
 }
 
@@ -561,7 +401,6 @@ __STATIC_INLINE void USBDHAL_SetAddr( uint8_t addr )
               (addr << _USB_DCFG_DEVADDR_SHIFT );
 }
 
-#if !defined( USB_SLAVEMODE )
 __STATIC_INLINE void USBDHAL_SetEp0InDmaPtr( uint8_t* addr )
 {
   USB->DIEP0DMAADDR = (uint32_t)addr;
@@ -571,7 +410,6 @@ __STATIC_INLINE void USBDHAL_SetEp0OutDmaPtr( uint8_t* addr )
 {
   USB->DOEP0DMAADDR = (uint32_t)addr;
 }
-#endif
 
 __STATIC_INLINE void USBDHAL_SetEPDISNAK( USBD_Ep_TypeDef *ep )
 {
@@ -642,13 +480,6 @@ __STATIC_INLINE void USBDHAL_StartEp0In( uint32_t len )
 
   USB->DIEP0CTL = ( USB->DIEP0CTL & ~DEPCTL_WO_BITMASK ) |
                   USB_DIEP_CTL_CNAK | USB_DIEP_CTL_EPENA;
-
-#if defined( USB_SLAVEMODE )
-  if ( len )        /* Enable Tx FIFO Empty Interrupt */
-  {
-    USB->DIEPEMPMSK |= 1;
-  }
-#endif
 }
 
 __STATIC_INLINE void USBDHAL_StartEp0Out( uint32_t len )
@@ -666,13 +497,11 @@ __STATIC_INLINE void USBDHAL_StartEp0Setup( USBD_Device_TypeDef *dev )
 
   USB->DOEP0TSIZ = 3 << _USB_DOEP0TSIZ_SUPCNT_SHIFT;
 
-#if !defined( USB_SLAVEMODE )
   dev->setup = dev->setupPkt;
   USB->DOEP0DMAADDR = (uint32_t)dev->setup;
 
   USB->DOEP0CTL = ( USB->DOEP0CTL & ~DEPCTL_WO_BITMASK ) |
                   USB_DOEP_CTL_CNAK | USB_DOEP_CTL_EPENA;
-#endif
 }
 
 __STATIC_INLINE void USBDHAL_StartEpIn( USBD_Ep_TypeDef *ep )
@@ -696,15 +525,7 @@ __STATIC_INLINE void USBDHAL_StartEpIn( USBD_Ep_TypeDef *ep )
                 ( xfersize << _USB_DIEP_TSIZ_XFERSIZE_SHIFT   ) |
                 ( pktcnt   << _USB_DIEP_TSIZ_PKTCNT_SHIFT     );
 
-#if defined( USB_SLAVEMODE )
-  if ( ep->remaining )              /* Enable Tx FIFO Empty Interrupt */
-  {
-    USB->DIEPEMPMSK |= ep->mask;
-  }
-#else
   USB_DINEPS[ ep->num ].DMAADDR = (uint32_t)ep->buf;
-#endif
-
   USB_DINEPS[ ep->num ].CTL =
                   ( USB_DINEPS[ ep->num ].CTL & ~DEPCTL_WO_BITMASK ) |
                   USB_DIEP_CTL_CNAK                                  |
@@ -732,11 +553,8 @@ __STATIC_INLINE void USBDHAL_StartEpOut( USBD_Ep_TypeDef *ep )
                   ( xfersize << _USB_DOEP_TSIZ_XFERSIZE_SHIFT   ) |
                   ( pktcnt   << _USB_DOEP_TSIZ_PKTCNT_SHIFT     );
 
-#if !defined( USB_SLAVEMODE )
   ep->hwXferSize = xfersize;
   USB_DOUTEPS[ ep->num ].DMAADDR = (uint32_t)ep->buf;
-#endif
-
   USB_DOUTEPS[ ep->num ].CTL =
                           ( USB_DOUTEPS[ ep->num ].CTL  &
                             ~DEPCTL_WO_BITMASK             ) |
@@ -825,56 +643,9 @@ __STATIC_INLINE void USBHHAL_EnableInts( void )
   USB->GINTSTS = 0xFFFFFFFF;
 
   USB->GINTMSK = USB_GINTMSK_PRTINTMSK     |
-#if defined( USB_SLAVEMODE )
-                 USB_GINTMSK_RXFLVLMSK     |
-#endif
                  USB_GINTMSK_HCHINTMSK     |
                  USB_GINTMSK_DISCONNINTMSK;
 }
-
-#if defined( USB_SLAVEMODE )
-__STATIC_INLINE void USBHHAL_FillFifo( uint8_t hcnum,
-                                       uint32_t fifoStatus,
-                                       USBH_Hc_TypeDef *hc )
-{
-  uint16_t words, len;
-
-  if ( hc->remaining > 0 )
-  {
-    len   = EFM32_MIN( hc->remaining, hc->ep->packetSize );
-    words = ( len + 3 ) / 4;
-
-    if ( ( fifoStatus   & _USB_GNPTXSTS_NPTXQSPCAVAIL_MASK            ) &&
-         ( ( fifoStatus & _USB_GNPTXSTS_NPTXFSPCAVAIL_MASK ) >= words )    )
-    {
-      hc->pending = len;
-      USBHAL_WriteFifo( hcnum, hc->buf, len );
-      if ( hc->ep->type == USB_EPTYPE_INTR )
-      {
-        hc->txPFempIntOn = false;
-      }
-      else
-      {
-        hc->txNpFempIntOn = false;
-      }
-    }
-    else
-    {
-      /* Write to FIFO on "empty" int. */
-      if ( hc->ep->type == USB_EPTYPE_INTR )
-      {
-        USB->GINTMSK |= USB_GINTSTS_PTXFEMP;
-        hc->txPFempIntOn = true;
-      }
-      else
-      {
-        USB->GINTMSK |= USB_GINTSTS_NPTXFEMP; /* Write FIFO on "empty" int. */
-        hc->txNpFempIntOn = true;
-      }
-    }
-  }
-}
-#endif
 
 __STATIC_INLINE uint16_t USBHHAL_GetFrameNum( void )
 {
@@ -891,9 +662,6 @@ __STATIC_INLINE uint32_t USBHHAL_GetHcInts( uint8_t hcnum )
   uint32_t retVal;
 
   retVal  = USB->HC[ hcnum ].INT;
-#if defined( USB_SLAVEMODE )
-  retVal &= USB->HC[ hcnum ].INTMSK;
-#endif
   return retVal;
 }
 

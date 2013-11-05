@@ -2,7 +2,7 @@
  * @file
  * @brief USB protocol stack library, USB host peripheral interrupt handlers.
  * @author Energy Micro AS
- * @version 3.0.2
+ * @version 3.20.2
  *******************************************************************************
  * @section License
  * <b>(C) Copyright 2012 Energy Micro AS, http://www.energymicro.com</b>
@@ -51,31 +51,11 @@
 #define FIFO_TXSTS_HCNUM_MASK  0x78000000
 #define FIFO_TXSTS_HCNUM_SHIFT 27
 
-#if defined( USB_SLAVEMODE )
-#define TOGGLE_DATA_PID()                       \
-  if ( eptype != HCCHAR_EPTYPE_ISOC )           \
-  {                                             \
-    if ( hc->ep->toggle == USB_PID_DATA0 )      \
-    {                                           \
-      hc->ep->toggle = USB_PID_DATA1;           \
-    }                                           \
-    else if ( hc->ep->toggle == USB_PID_DATA1 ) \
-    {                                           \
-      hc->ep->toggle = USB_PID_DATA0;           \
-    }                                           \
-  }
-#endif
-
 static void Handle_HcInInt(  uint8_t hcnum );
 static void Handle_HcOutInt( uint8_t hcnum );
 static void Handle_USB_GINTSTS_DISCONNINT ( void );
 static void Handle_USB_GINTSTS_HCHINT     ( void );
 static void Handle_USB_GINTSTS_PRTINT     ( void );
-#if defined( USB_SLAVEMODE )
-static void Handle_USB_GINTSTS_NPTXFEMP   ( void );
-static void Handle_USB_GINTSTS_PTXFEMP    ( void );
-static void Handle_USB_GINTSTS_RXFLVL     ( void );
-#endif
 
 /*
  * USB_IRQHandler() is the first level handler for the USB peripheral interrupt.
@@ -94,11 +74,6 @@ void USB_IRQHandler( void )
     return;
   }
 
-#if defined( USB_SLAVEMODE )
-  HANDLE_INT( USB_GINTSTS_RXFLVL     )
-  HANDLE_INT( USB_GINTSTS_NPTXFEMP   )
-  HANDLE_INT( USB_GINTSTS_PTXFEMP    )
-#endif
   HANDLE_INT( USB_GINTSTS_HCHINT     )
   HANDLE_INT( USB_GINTSTS_PRTINT     )
   HANDLE_INT( USB_GINTSTS_DISCONNINT )
@@ -130,7 +105,6 @@ static void Handle_HcInInt( uint8_t hcnum )
 
   DEBUG_USB_INT_HI_PUTCHAR( 'i' );
 
-#if !defined( USB_SLAVEMODE )
   if ( status & USB_HC_INT_CHHLTD )
   {
     USB->HC[ hcnum ].INT = 0xFFFFFFFF;
@@ -228,138 +202,6 @@ static void Handle_HcInInt( uint8_t hcnum )
     else
       USBHEP_EpHandler( hc->ep, result );
   }
-#else /* !defined( USB_SLAVEMODE ) */
-
-  if ( status & USB_HC_INT_XFERCOMPL )
-  {
-    DEBUG_USB_INT_HI_PUTCHAR( 'c' );
-    USB->HC[ hcnum ].INT = USB_HC_INT_XFERCOMPL;
-    USBHHAL_HCHalt( hcnum, hcchar, eptype );
-
-    hc->status |= HCS_COMPLETED;
-
-    TOGGLE_DATA_PID()                         /* Update data toggle */
-  }
-
-  else if ( status & USB_HC_INT_XACTERR )
-  {
-    USB->HC[ hcnum ].INT = USB_HC_INT_XACTERR;
-    USBHHAL_HCHalt( hcnum, hcchar, eptype );
-
-    hc->status |= HCS_XACT;
-    DEBUG_USB_INT_LO_PUTS( "XacT" );
-  }
-
-  else if ( status & USB_HC_INT_BBLERR )
-  {
-    USB->HC[ hcnum ].INT = USB_HC_INT_BBLERR;
-    USBHHAL_HCHalt( hcnum, hcchar, eptype );
-
-    hc->status |= HCS_BABBLE;
-    DEBUG_USB_INT_LO_PUTS( "BabL" );
-  }
-
-  else if ( status & USB_HC_INT_STALL )
-  {
-    USB->HC[ hcnum ].INT = USB_HC_INT_STALL;
-    USBHHAL_HCHalt( hcnum, hcchar, eptype );
-
-    hc->status |= HCS_STALL;
-    DEBUG_USB_INT_LO_PUTS( "StaL" );
-  }
-
-  else if ( status & USB_HC_INT_NAK )
-  {
-    DEBUG_USB_INT_HI_PUTCHAR( 'n' );
-    USB->HC[ hcnum ].INT = USB_HC_INT_NAK;
-
-    if ( ( eptype != HCCHAR_EPTYPE_INTR ) &&
-         ( hc->status == 0              )    )
-    {
-      /* Re-activate the channel */
-      USBHHAL_HCActivate( hcnum, hcchar, false );
-    }
-    else
-    {
-      USBHHAL_HCHalt( hcnum, hcchar, eptype );
-      hc->status |= HCS_NAK;
-    }
-  }
-
-  else if ( status & USB_HC_INT_DATATGLERR )
-  {
-    USB->HC[ hcnum ].INT = USB_HC_INT_DATATGLERR;
-    USBHHAL_HCHalt( hcnum, hcchar, eptype );
-
-    hc->status |= HCS_TGLERR;
-  }
-
-  else if ( status & USB_HC_INT_CHHLTD )
-  {
-    DEBUG_USB_INT_HI_PUTCHAR( 'h' );
-    USB->HC[ hcnum ].INT = 0xFFFFFFFF;
-    USB->HC[ hcnum ].INTMSK &= ~USB_HC_INT_CHHLTD;
-
-    result = USB_STATUS_EP_ERROR;
-
-    if ( hc->status & HCS_STALL )
-    {
-      result = USB_STATUS_EP_STALLED;
-    }
-
-    else if ( ( hc->status &
-                ( HCS_NAK | HCS_STALL | HCS_TGLERR |
-                  HCS_BABBLE | HCS_TIMEOUT           ) ) == HCS_TGLERR )
-    {
-      hc->errorCnt++;
-      if ( hc->errorCnt < 3 )
-      {
-        hc->status |= HCS_RETRY;
-      }
-    }
-
-    else if ( ( hc->status &
-              ( HCS_TGLERR | HCS_TIMEOUT |
-                HCS_XACT | HCS_BABBLE      ) ) == HCS_XACT )
-    {
-      hc->errorCnt++;
-      if ( hc->errorCnt < 3 )
-      {
-        hc->status |= HCS_RETRY;
-      }
-    }
-
-    else if ( ( hc->status & ( HCS_NAK | HCS_TIMEOUT ) ) == HCS_NAK )
-    {
-      if ( eptype == HCCHAR_EPTYPE_INTR )
-        return;
-
-      result = USB_STATUS_EP_NAK;
-    }
-
-    else if ( hc->status & ( HCS_TIMEOUT | HCS_NAK ) )
-    {
-      result = USB_STATUS_TIMEOUT;
-    }
-
-    else if ( hc->status == HCS_COMPLETED )
-    {
-      result = USB_STATUS_OK;
-    }
-
-    if ( hc->status & HCS_RETRY )
-    {
-      USBHHAL_HCStart( hcnum );
-    }
-    else
-    {
-      if ( eptype == HCCHAR_EPTYPE_CTRL )
-        USBHEP_CtrlEpHandler( hc->ep, result );
-      else
-        USBHEP_EpHandler( hc->ep, result );
-    }
-  }
-#endif /* !defined( USB_SLAVEMODE ) */
 }
 
 /*
@@ -381,7 +223,6 @@ static void Handle_HcOutInt( uint8_t hcnum )
 
   DEBUG_USB_INT_HI_PUTCHAR( 'o' );
 
-#if !defined( USB_SLAVEMODE )
   if ( status & USB_HC_INT_CHHLTD )
   {
     USB->HC[ hcnum ].INT = 0xFFFFFFFF;
@@ -455,122 +296,6 @@ static void Handle_HcOutInt( uint8_t hcnum )
     else
       USBHEP_EpHandler( hc->ep, result );
   }
-#else /* #if !defined( USB_SLAVEMODE ) */
-
-  if ( status & USB_HC_INT_XFERCOMPL )
-  {
-    DEBUG_USB_INT_HI_PUTCHAR( 'c' );
-    USB->HC[ hcnum ].INT = USB_HC_INT_XFERCOMPL;
-    USBHHAL_HCHalt( hcnum, hcchar, eptype );
-
-    hc->status |= HCS_COMPLETED;
-  }
-
-  else if ( status & USB_HC_INT_STALL )
-  {
-    USB->HC[ hcnum ].INT = USB_HC_INT_STALL;
-    USBHHAL_HCHalt( hcnum, hcchar, eptype );
-
-    hc->status |= HCS_STALL;
-    DEBUG_USB_INT_LO_PUTS( "StaL" );
-  }
-
-  else if ( status & USB_HC_INT_ACK )
-  {
-    DEBUG_USB_INT_HI_PUTCHAR( 'a' );
-    USB->HC[ hcnum ].INT = USB_HC_INT_ACK;
-
-    if ( hc->pending )
-    {
-      hc->buf       += hc->pending;
-      hc->xferred   += hc->pending;
-      hc->remaining -= hc->pending;
-      hc->pending = 0;
-
-      TOGGLE_DATA_PID()                              /* Update data toggle    */
-
-      if ( eptype == HCCHAR_EPTYPE_INTR )
-      {
-        USBHHAL_FillFifo( hcnum, USB->HPTXSTS, hc ); /* There may be more data*/
-      }
-      else
-      {
-        USBHHAL_FillFifo( hcnum, USB->GNPTXSTS, hc );/* There may be more data*/
-      }
-    }
-  }
-
-  else if ( status & USB_HC_INT_NAK )
-  {
-    DEBUG_USB_INT_HI_PUTCHAR( 'n' );
-    USB->HC[ hcnum ].INT = USB_HC_INT_NAK;
-    USBHHAL_HCHalt( hcnum, hcchar, eptype );
-
-    hc->status |= HCS_NAK;
-  }
-
-  else if ( status & USB_HC_INT_XACTERR )
-  {
-    USB->HC[ hcnum ].INT = USB_HC_INT_XACTERR;
-    USBHHAL_HCHalt( hcnum, hcchar, eptype );
-
-    hc->status |= HCS_XACT;
-    DEBUG_USB_INT_LO_PUTS( "XacT" );
-  }
-
-  else if ( status & USB_HC_INT_CHHLTD )
-  {
-    DEBUG_USB_INT_HI_PUTCHAR( 'h' );
-    USB->HC[ hcnum ].INT = 0xFFFFFFFF;
-    USB->HC[ hcnum ].INTMSK &= ~USB_HC_INT_CHHLTD;
-
-    result = USB_STATUS_EP_ERROR;
-
-    if ( hc->status & HCS_STALL )
-    {
-      result = USB_STATUS_EP_STALLED;
-    }
-
-    else if ( hc->status == HCS_XACT )
-    {
-      hc->errorCnt++;
-      if ( hc->errorCnt < 3 )
-      {
-        hc->status |= HCS_RETRY;
-      }
-    }
-
-    else if ( ( hc->status & ( HCS_NAK | HCS_TIMEOUT ) ) == HCS_NAK )
-    {
-      if ( eptype == HCCHAR_EPTYPE_INTR )
-        return;
-
-      hc->status |= HCS_RETRY;
-    }
-
-    else if ( hc->status & HCS_TIMEOUT )
-    {
-      result = USB_STATUS_TIMEOUT;
-    }
-
-    else if ( hc->status == HCS_COMPLETED )
-    {
-      result = USB_STATUS_OK;
-    }
-
-    if ( hc->status & HCS_RETRY )
-    {
-      USBHHAL_HCStart( hcnum );
-    }
-    else
-    {
-      if ( eptype == HCCHAR_EPTYPE_CTRL )
-        USBHEP_CtrlEpHandler( hc->ep, result );
-      else
-        USBHEP_EpHandler( hc->ep, result );
-    }
-  }
-#endif /* #if !defined( USB_SLAVEMODE ) */
 }
 
 /*
@@ -591,7 +316,7 @@ static void Handle_USB_GINTSTS_DISCONNINT( void )
   for ( i=0; i< NUM_HC_USED + 2; i++ )
   {
     hcchar = USB->HC[ i ].CHAR;                 /* Halt channel             */
-    USBHHAL_HCHalt( i, hcchar, hcchar & _USB_HC_CHAR_EPTYPE_MASK );
+    USBHHAL_HCHalt( i, hcchar );
     USB->HC[ i ].INT = 0xFFFFFFFF;              /* Clear pending interrupts */
 
     if ( !hcs[ i ].idle )
@@ -630,35 +355,6 @@ static void Handle_USB_GINTSTS_HCHINT( void )
     }
   }
 }
-
-#if defined( USB_SLAVEMODE )
-/*
- * Handle non periodic transmit FIFO empty interrupt.
- */
-static void Handle_USB_GINTSTS_NPTXFEMP( void )
-{
-  int i;
-  uint8_t hcnum;
-  uint32_t fifoStatus;
-  USBH_Hc_TypeDef *hc;
-
-  fifoStatus = USB->GNPTXSTS;
-  hcnum = ( fifoStatus & FIFO_TXSTS_HCNUM_MASK ) >> FIFO_TXSTS_HCNUM_SHIFT;
-  hc = &hcs[ hcnum ];
-
-  USBHHAL_FillFifo( hcnum, fifoStatus, hc );
-
-  DEBUG_USB_INT_LO_PUTS( "NpE" );
-
-  for ( i = 0; i < NUM_HC_USED + 2; i++ )
-  {
-    if ( hcs[ i ].txNpFempIntOn == true )
-      return;                               /* TxFemp int must remain on */
-  }
-
-  USB->GINTMSK &= ~USB_GINTSTS_NPTXFEMP;    /* Turn off TxFemp interrupt */
-}
-#endif
 
 /*
  * Callback function for port interrupt state machine.
@@ -794,104 +490,6 @@ static void Handle_USB_GINTSTS_PRTINT( void )
   hprt |= USB_HPRT_PRTCONNDET | USB_HPRT_PRTENCHNG | USB_HPRT_PRTOVRCURRCHNG;
   USB->HPRT = hprt;                   /* Clear all port interrupt flags */
 }
-
-#if defined( USB_SLAVEMODE )
-/*
- * Handle periodic transmit FIFO empty interrupt.
- */
-static void Handle_USB_GINTSTS_PTXFEMP( void )
-{
-  int i;
-  uint8_t hcnum;
-  uint32_t fifoStatus;
-  USBH_Hc_TypeDef *hc;
-
-  fifoStatus = USB->HPTXSTS;
-  hcnum = ( fifoStatus & FIFO_TXSTS_HCNUM_MASK ) >> FIFO_TXSTS_HCNUM_SHIFT;
-  hc = &hcs[ hcnum ];
-
-  USBHHAL_FillFifo( hcnum, fifoStatus, hc );
-
-  DEBUG_USB_INT_LO_PUTS( "PE" );
-
-  for ( i = 0; i < NUM_HC_USED + 2; i++ )
-  {
-    if ( hcs[ i ].txPFempIntOn == true )
-      return;                               /* TxFemp int must remain on */
-  }
-
-  USB->GINTMSK &= ~USB_GINTSTS_PTXFEMP ;    /* Turn off TxFemp interrupt */
-}
-#endif
-
-#if defined( USB_SLAVEMODE )
-/*
- * Handle receive FIFO full interrupt.
- */
-static void Handle_USB_GINTSTS_RXFLVL( void )
-{
-  uint8_t hcnum;
-  USBH_Hc_TypeDef *hc;
-  uint32_t grxstsp, hcchar;
-  int bytecnt, pid, packetcnt;
-
-  /* Disable the Rx Status Queue Level interrupt */
-  USB->GINTMSK &= ~USB_GINTMSK_RXFLVLMSK;
-
-  grxstsp   = USB->GRXSTSP;
-  hcnum     = ( grxstsp & _USB_GRXSTSP_CHEPNUM_MASK ) >> _USB_GRXSTSP_CHEPNUM_SHIFT;
-  hc        = &hcs[ hcnum ];
-  bytecnt   = ( grxstsp & _USB_GRXSTSP_BCNT_MASK ) >> _USB_GRXSTSP_BCNT_SHIFT;
-  pid       = ( grxstsp & _USB_GRXSTSP_DPID_MASK ) >> _USB_GRXSTSP_DPID_SHIFT;
-  packetcnt = ( USB->HC[ hcnum ].TSIZ & _USB_HC_TSIZ_PKTCNT_MASK ) >>
-              _USB_HC_TSIZ_PKTCNT_SHIFT;
-  hcchar    = USB->HC[ hcnum ].CHAR;
-
-  DEBUG_USB_INT_HI_PUTCHAR( 'q' );
-
-  switch ( grxstsp & _USB_GRXSTSP_PKTSTS_MASK )
-  {
-    case GRXSTSP_PKTSTS_HOST_DATAINRECEIVED:
-      /* Read the data into the host buffer. */
-      if ( ( bytecnt > 0 ) && ( hc->buf != NULL ) )
-      {
-        USBHAL_ReadFifo( hc->buf, bytecnt );
-
-        hc->remaining -= bytecnt;
-        hc->buf       += bytecnt;
-        hc->xferred   += bytecnt;
-
-        if ( packetcnt )
-        {
-          /* re-activate the channel when more packets are expected */
-          hcchar |= USB_HC_CHAR_CHENA;
-          hcchar &= ~USB_HC_CHAR_CHDIS;
-          USB->HC[ hcnum ].CHAR = hcchar;
-        }
-
-        hc->ep->toggle = pid;
-      }
-      DEBUG_USB_INT_HI_PUTS( "IR" );
-      break;
-
-    case GRXSTSP_PKTSTS_HOST_DATAINCOMPLETE:
-      if ( packetcnt )
-      {
-        hc->ep->toggle = pid;
-      }
-      DEBUG_USB_INT_HI_PUTS( "IC" );
-      break;
-
-    case GRXSTSP_PKTSTS_HOST_CHANNELHALTED:
-    case GRXSTSP_PKTSTS_HOST_DATATOGGLEERROR:
-    default:
-      break;
-  }
-
-  /* Enable the Rx Status Queue Level interrupt */
-  USB->GINTMSK |= USB_GINTMSK_RXFLVLMSK;
-}
-#endif
 
 /** @endcond */
 

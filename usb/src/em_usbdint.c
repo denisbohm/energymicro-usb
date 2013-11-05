@@ -2,7 +2,7 @@
  * @file
  * @brief USB protocol stack library, USB device peripheral interrupt handlers.
  * @author Energy Micro AS
- * @version 3.0.2
+ * @version 3.20.2
  ******************************************************************************
  * @section License
  * <b>(C) Copyright 2012 Energy Micro AS, http://www.energymicro.com</b>
@@ -50,9 +50,6 @@ static void Handle_USB_GINTSTS_ENUMDONE  ( void );
 static void Handle_USB_GINTSTS_IEPINT    ( void );
 static void Handle_USB_GINTSTS_OEPINT    ( void );
 static void Handle_USB_GINTSTS_RESETDET  ( void );
-#if defined( USB_SLAVEMODE )
-static void Handle_USB_GINTSTS_RXFLVL    ( void );
-#endif
 static void Handle_USB_GINTSTS_SOF       ( void );
 static void Handle_USB_GINTSTS_USBRST    ( void );
 static void Handle_USB_GINTSTS_USBSUSP   ( void );
@@ -77,17 +74,22 @@ static uint32_t  x_USB_DAINTMSK;
 static uint32_t  x_USB_DIEPMSK;
 static uint32_t  x_USB_DOEPMSK;
 static uint32_t  x_USB_PCGCCTL;
+
+#if ( NUM_EP_USED > 0 )
 static uint32_t  x_USB_EP_CTL[ NUM_EP_USED ];
 static uint32_t  x_USB_EP_TSIZ[ NUM_EP_USED ];
 static uint32_t  x_USB_EP_DMAADDR[ NUM_EP_USED ];
-
-#if NUM_EP_USED > MAX_NUM_TX_FIFOS
-  #define FIFO_CNT MAX_NUM_TX_FIFOS
-#else
-  #define FIFO_CNT NUM_EP_USED
 #endif
 
+#if ( NUM_EP_USED > MAX_NUM_TX_FIFOS )
+#define FIFO_CNT MAX_NUM_TX_FIFOS
+#else
+#define FIFO_CNT NUM_EP_USED
+#endif
+
+#if ( FIFO_CNT > 0 )
 static uint32_t  x_USB_DIEPTXFS[ FIFO_CNT ];
+#endif
 
 #endif /* if ( USB_PWRSAVE_MODE ) */
 
@@ -97,9 +99,7 @@ static uint32_t  x_USB_DIEPTXFS[ FIFO_CNT ];
 void USB_IRQHandler( void )
 {
   uint32_t status;
-#if ( USB_PWRSAVE_MODE & USB_PWRSAVE_MODE_ONVBUSOFF )
   bool servedVbusInterrupt = false;
-#endif
 
   INT_Disable();
 
@@ -116,50 +116,56 @@ void USB_IRQHandler( void )
   }
 #endif /* if ( USB_PWRSAVE_MODE ) */
 
-#if ( USB_PWRSAVE_MODE & USB_PWRSAVE_MODE_ONVBUSOFF )
-  if ( USB->IF )
+  if ( USB->IF && ( USB->CTRL & USB_CTRL_VREGOSEN ) )
   {
-    if ( ( USB->STATUS & USB_STATUS_VREGOS ) && ( USB->IEN & USB_IEN_VREGOSH ) )
+    if ( USB->IF & USB_IF_VREGOSH )
     {
-      servedVbusInterrupt = true;
-      DEBUG_USB_INT_LO_PUTS( "\nVboN" );
-      USB->IEN = USB_IEN_VREGOSL;
+      USB->IFC = USB_IFC_VREGOSH;
 
-      if ( UsbPowerUp() )
-        USBDHAL_EnableUsbResetInt();
+      if ( USB->STATUS & USB_STATUS_VREGOS )
+      {
+        servedVbusInterrupt = true;
+        DEBUG_USB_INT_LO_PUTS( "\nVboN" );
 
-      USBD_SetUsbState( USBD_STATE_POWERED );
-    }
-
-    else if ( !( USB->STATUS & USB_STATUS_VREGOS ) && ( USB->IEN & USB_IEN_VREGOSL ) )
-    {
-      servedVbusInterrupt = true;
-      DEBUG_USB_INT_LO_PUTS( "\nVboF" );
-      USB->IEN = USB_IEN_VREGOSH;
-
-      USB->GINTMSK = 0;
-      USB->GINTSTS = 0xFFFFFFFF;
-
-      UsbPowerDown();
-      USBD_SetUsbState( USBD_STATE_NONE );
-    }
-
-    USB->IFC = USB_IFC_VREGOSH | USB_IFC_VREGOSL;
-  }
+#if ( USB_PWRSAVE_MODE & USB_PWRSAVE_MODE_ONVBUSOFF )
+        if ( UsbPowerUp() )
 #endif
+        {
+          USBDHAL_EnableUsbResetInt();
+        }
+
+        USBD_SetUsbState( USBD_STATE_POWERED );
+      }
+    }
+
+    if ( USB->IF & USB_IF_VREGOSL )
+    {
+      USB->IFC = USB_IFC_VREGOSL;
+
+      if ( !( USB->STATUS & USB_STATUS_VREGOS ) )
+      {
+        servedVbusInterrupt = true;
+        DEBUG_USB_INT_LO_PUTS( "\nVboF" );
+
+        USB->GINTMSK = 0;
+        USB->GINTSTS = 0xFFFFFFFF;
+
+#if ( USB_PWRSAVE_MODE & USB_PWRSAVE_MODE_ONVBUSOFF )
+        UsbPowerDown();
+#endif
+        USBD_SetUsbState( USBD_STATE_NONE );
+      }
+    }
+  }
 
   status = USBHAL_GetCoreInts();
   if ( status == 0 )
   {
     INT_Enable();
-#if ( USB_PWRSAVE_MODE & USB_PWRSAVE_MODE_ONVBUSOFF )
     if ( !servedVbusInterrupt )
     {
       DEBUG_USB_INT_LO_PUTS( "\nSinT" );
     }
-#else
-    DEBUG_USB_INT_LO_PUTS( "\nSinT" );
-#endif
     return;
   }
 
@@ -167,9 +173,6 @@ void USB_IRQHandler( void )
   HANDLE_INT( USB_GINTSTS_WKUPINT    )
   HANDLE_INT( USB_GINTSTS_USBSUSP    )
   HANDLE_INT( USB_GINTSTS_SOF        )
-#if defined( USB_SLAVEMODE )
-  HANDLE_INT( USB_GINTSTS_RXFLVL     )
-#endif
   HANDLE_INT( USB_GINTSTS_ENUMDONE   )
   HANDLE_INT( USB_GINTSTS_USBRST     )
   HANDLE_INT( USB_GINTSTS_IEPINT     )
@@ -224,19 +227,12 @@ static void Handle_USB_GINTSTS_IEPINT( void )
 
       if ( status & USB_DIEP_INT_XFERCOMPL )
       {
-#if defined( USB_SLAVEMODE )
-        /* Disable Tx FIFO empty interrupt */
-        USB->DIEPEMPMSK &= ~epmask;
-        USB_DINEPS[ epnum ].INT = USB_DIEP_INT_TXFEMP;
-        status &= ~USB_DIEP_INT_TXFEMP;
-#endif
         USB_DINEPS[ epnum ].INT = USB_DIEP_INT_XFERCOMPL;
 
         DEBUG_USB_INT_HI_PUTCHAR( 'c' );
 
         if ( epnum == 0 )
         {
-#if !defined( USB_SLAVEMODE )
           if ( ep->remaining > ep->packetSize )
           {
             ep->remaining -= ep->packetSize;
@@ -247,34 +243,18 @@ static void Handle_USB_GINTSTS_IEPINT( void )
             ep->xferred += ep->remaining;
             ep->remaining = 0;
           }
-#endif
           USBDEP_Ep0Handler( dev );
         }
         else
         {
-#if !defined( USB_SLAVEMODE )
           ep->xferred = ep->remaining -
                         ( ( USB_DINEPS[ epnum ].TSIZ      &
                             _USB_DIEP_TSIZ_XFERSIZE_MASK    ) >>
                           _USB_DIEP_TSIZ_XFERSIZE_SHIFT          );
           ep->remaining -= ep->xferred;
-#endif
           USBDEP_EpHandler( ep->addr );
         }
       }
-
-#if defined( USB_SLAVEMODE )
-      if ( status & USB_DIEP_INT_TXFEMP )
-      {
-        USB_DINEPS[ epnum ].INT = USB_DIEP_INT_TXFEMP;
-
-        if ( ep->state != D_EP_IDLE )
-        {
-          DEBUG_USB_INT_HI_PUTCHAR( 'f' );
-          USBDHAL_FillFifo( ep );
-        }
-      }
-#endif
     }
   }
 }
@@ -309,7 +289,6 @@ static void Handle_USB_GINTSTS_OEPINT( void )
 
         if ( epnum == 0 )
         {
-#if !defined( USB_SLAVEMODE )
           if ( ep->remaining > ep->packetSize )
           {
             ep->remaining -= ep->packetSize;
@@ -320,17 +299,14 @@ static void Handle_USB_GINTSTS_OEPINT( void )
             ep->xferred += ep->remaining;
             ep->remaining = 0;
           }
-#endif
           USBDEP_Ep0Handler( dev );
         }
         else
         {
-#if !defined( USB_SLAVEMODE )
           ep->xferred = ep->hwXferSize -
               ( ( USB_DOUTEPS[ epnum ].TSIZ & _USB_DOEP_TSIZ_XFERSIZE_MASK ) >>
                 _USB_DOEP_TSIZ_XFERSIZE_SHIFT );
           ep->remaining -= ep->xferred;
-#endif
           USBDEP_EpHandler( ep->addr );
         }
       }
@@ -340,7 +316,6 @@ static void Handle_USB_GINTSTS_OEPINT( void )
       {
         DEBUG_USB_INT_LO_PUTS( "\nSP" );
 
-#if !defined( USB_SLAVEMODE )
         if ( USB->DOEP0INT & USB_DOEP_INT_BACK2BACKSETUP )
         {                           /* Back to back setup packets received */
           USB->DOEP0INT = USB_DOEP_INT_BACK2BACKSETUP;
@@ -360,7 +335,6 @@ static void Handle_USB_GINTSTS_OEPINT( void )
 
           dev->setup = &dev->setupPkt[ 2 - supCnt ];
         }
-#endif
         USB->DOEP0TSIZ |= 3 << _USB_DOEP0TSIZ_SUPCNT_SHIFT;
         USB->DOEP0DMAADDR = (uint32_t)dev->setupPkt;
         USB->DOEP0INT = USB_DOEP_INT_SETUP;
@@ -381,64 +355,13 @@ static void Handle_USB_GINTSTS_RESETDET  ( void )
   UsbPowerUp();
 #endif /* if ( USB_PWRSAVE_MODE ) */
 
-  USBD_SetUsbState( USBD_STATE_DEFAULT );
+  if (USB->STATUS & USB_STATUS_VREGOS) {
+    USBD_SetUsbState( USBD_STATE_DEFAULT );
+  } else {
+    USBD_SetUsbState( USBD_STATE_NONE );
+  }
   DEBUG_USB_INT_LO_PUTS( "RsuP\n" );
 }
-
-#if defined( USB_SLAVEMODE )
-/*
- * Handle receive FIFO full interrupt.
- */
-static void Handle_USB_GINTSTS_RXFLVL( void )
-{
-  USBD_Ep_TypeDef *ep;
-  uint32_t status, byteCount, count, residue;
-
-  DEBUG_USB_INT_HI_PUTCHAR( 'q' );
-
-  status = USB->GRXSTSP;                  /* Get status from top of FIFO */
-
-  ep = USBD_GetEpFromAddr( status & _USB_GRXSTSP_CHEPNUM_MASK );
-
-  switch ( status & _USB_GRXSTSP_PKTSTS_MASK )
-  {
-    case GRXSTSP_PKTSTS_DEVICE_DATAOUTRECEIVED:
-      byteCount = (status & _USB_GRXSTSP_BCNT_MASK) >> _USB_GRXSTSP_BCNT_SHIFT;
-      if ( byteCount )
-      {
-        DEBUG_USB_INT_HI_PUTCHAR( 'e' );
-        if ( ep->state != D_EP_IDLE )
-        {
-          /* Check for possible buffer overflow */
-          if ( byteCount > ep->remaining )
-          {
-            residue = byteCount - ep->remaining;
-          }
-          else
-          {
-            residue = 0;
-          }
-
-          count = EFM32_MIN( byteCount, ep->remaining );
-          USBHAL_ReadFifo( ep->buf, count );
-          ep->xferred   += count;
-          ep->remaining -= count;
-          ep->buf       += count;
-
-          if ( residue )
-          {
-            USBHAL_FlushFifo( residue );
-          }
-        }
-      }
-      break;
-
-    case GRXSTSP_PKTSTS_DEVICE_SETUPRECEIVED:
-      USBHAL_ReadFifo( (uint8_t*)dev->setup, USB_SETUP_PKT_SIZE );
-      break;
-  }
-}
-#endif
 
 /*
  * Handle Start Of Frame (SOF) interrupt.
@@ -548,8 +471,13 @@ static void Handle_USB_GINTSTS_WKUPINT( void )
  */
 static bool UsbPowerDown( void )
 {
-  int i, epNum;
+#if ( NUM_EP_USED > 0 ) || ( FIFO_CNT > 0 )
+  int i;
+#endif
+#if ( NUM_EP_USED > 0 )
+  int epNum;
   USBD_Ep_TypeDef *ep;
+#endif
 
   if ( !USBD_poweredDown )
   {
@@ -569,6 +497,7 @@ static bool UsbPowerDown( void )
     x_USB_DOEPMSK   = USB->DOEPMSK;
     x_USB_PCGCCTL   = USB->PCGCCTL;
 
+#if ( NUM_EP_USED > 0 )
     for ( i = 0; i < NUM_EP_USED; i++ )
     {
       ep = &dev->ep[ i+1 ];
@@ -586,11 +515,14 @@ static bool UsbPowerDown( void )
         x_USB_EP_DMAADDR[ i ] = USB_DOUTEPS[ epNum ].DMAADDR;
       }
     }
+#endif
 
+#if ( FIFO_CNT > 0 )
     for ( i = 0; i < FIFO_CNT; i++ )
     {
       x_USB_DIEPTXFS[ i ] = USB_DIEPTXFS[ i ];
     }
+#endif
 
     /* Prepare for wakeup on resume and reset. */
     USB->DCFG    = (USB->DCFG & ~_USB_DCFG_RESVALID_MASK) |
@@ -626,14 +558,24 @@ static bool UsbPowerDown( void )
 /*
  * Exit USB core partial powerdown mode, restore essential USB core registers.
  * Optionally prevent re-entry back to EM2.
+ * Returns true if a powerup sequence was performed.
  */
 static bool UsbPowerUp( void )
 {
-  int i, epNum;
+#if ( NUM_EP_USED > 0 ) || ( FIFO_CNT > 0 )
+  int i;
+#endif
+#if ( NUM_EP_USED > 0 )
+  int epNum;
   uint32_t tmp;
   USBD_Ep_TypeDef *ep;
+#endif
 
+#if ( USB_PWRSAVE_MODE & USB_PWRSAVE_MODE_ONVBUSOFF )
+  if ( USBD_poweredDown && ( USB->STATUS & USB_STATUS_VREGOS ) )
+#else
   if ( USBD_poweredDown )
+#endif
   {
     USBD_poweredDown = false;
 
@@ -651,22 +593,23 @@ static bool UsbPowerUp( void )
     USB->GUSBCFG = x_USB_GUSBCFG;
     USB->DCFG    = x_USB_DCFG;
 
+#if ( FIFO_CNT > 0 )
     for ( i = 0; i < FIFO_CNT; i++ )
     {
       USB_DIEPTXFS[ i ] = x_USB_DIEPTXFS[ i ];
     }
+#endif
 
+#if ( NUM_EP_USED > 0 )
     for ( i = 0; i < NUM_EP_USED; i++ )
     {
       ep = &dev->ep[ i+1 ];
       epNum = ep->num;
       if ( ep->in )
       {
-        tmp = ( ep->packetSize << _USB_DIEP_CTL_MPS_SHIFT    ) |
-              ( ep->type       << _USB_DIEP_CTL_EPTYPE_SHIFT ) |
-              ( ep->txFifoNum  << _USB_DIEP_CTL_TXFNUM_SHIFT ) |
-              USB_DIEP_CTL_USBACTEP                            |
-              USB_DIEP_CTL_SNAK;
+        tmp = x_USB_EP_CTL[ i ] &
+              ~( USB_DIEP_CTL_CNAK       | USB_DIEP_CTL_SNAK        |
+                 USB_DIEP_CTL_SETD0PIDEF | USB_DIEP_CTL_SETD1PIDOF    );
 
         if ( x_USB_EP_CTL[ i ] & USB_DIEP_CTL_DPIDEOF )
           tmp |= USB_DIEP_CTL_SETD1PIDOF;
@@ -688,6 +631,7 @@ static bool UsbPowerUp( void )
         USB_DOUTEPS[ epNum ].DMAADDR = x_USB_EP_DMAADDR[ i ];
       }
     }
+#endif
 
     USB->PCGCCTL   = x_USB_PCGCCTL;
     USB->DOEPMSK   = x_USB_DOEPMSK;

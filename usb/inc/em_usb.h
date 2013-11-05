@@ -2,7 +2,7 @@
  * @file
  * @brief USB protocol stack library API for EFM32.
  * @author Energy Micro AS
- * @version 3.0.2
+ * @version 3.20.2
  *******************************************************************************
  * @section License
  * <b>(C) Copyright 2012 Energy Micro AS, http://www.energymicro.com</b>
@@ -48,7 +48,6 @@
 
 #if defined( USB_USE_PRINTF )
 #include <stdio.h>
-#include <stdlib.h>
 #endif
 
 #ifdef __cplusplus
@@ -197,68 +196,67 @@ extern "C" {
 #define PORT_FULL_SPEED                   1     /**< Full speed return value for USBH_GetPortSpeed(). */
 #define PORT_LOW_SPEED                    2     /**< Low speed return value for USBH_GetPortSpeed().  */
 
+#if defined( __GNUC__  )                  /* GCC compilers */
+#if defined( __CHAR16_TYPE__ )
+typedef __CHAR16_TYPE__ char16_t;
+#else
+typedef unsigned short char16_t;
+#endif
+
+#elif defined( __ICCARM__ )               /* IAR compiler */
+#include <uchar.h>
+
+#elif defined( __CC_ARM )                 /* MDK-ARM compiler */
+typedef unsigned short char16_t;
+#endif
+
 /** Macro for creating USB compliant UTF-16LE UNICODE string descriptors.
- *  @n Example: STATIC_CONST_STRING_DESC( iManufacturer, L"Energy Micro AS" );
+ *  @n Example: STATIC_CONST_STRING_DESC( iManufacturer, 'E','n','e','r','g','y',' ','M','i','c','r','o',' ','A','S' );
+ *  @note The size of the resulting struct will be two byte larger than a USB string
+ *        descriptor. This is to accommodate a terminating null char for the string.
+ *        The value assigned to the 'len' member does not take this into account
+ *        and is therefore correct usb wise.
  */
-/*
-#define STATIC_CONST_STRING_DESC( name, value )  \
-typedef struct                      \
-{                                   \
-  uint8_t len;                      \
-  uint8_t type;                     \
-  wchar_t name[sizeof( value )/2];  \
-} __attribute__ ((packed)) _##name; \
-EFM32_ALIGN( 4 )                    \
-EFM32_PACK_START( 1 )               \
-static const _##name name __attribute__ ((aligned(4)))= \
-{                                   \
-  .len = sizeof(value),             \
-  .type = USB_STRING_DESCRIPTOR,    \
-  .name = value                     \
-}                                   \
-EFM32_PACK_END()
-*/
-
-// Modified string descriptor functions to work with gcc without using any special command line options.
-// -Denis Bohm (denis@fireflydesign.com)
-
-typedef uint16_t utf16_t;
-
-#define STATIC_CONST_STRING_DESC( name, ... ) \
-typedef struct \
-{ \
-uint8_t len; \
-uint8_t type; \
-utf16_t name[sizeof((utf16_t[]) __VA_ARGS__ )/2]; \
-} __attribute__ ((packed)) _##name; \
-EFM32_ALIGN( 4 ) \
-EFM32_PACK_START( 1 ) \
-static const _##name name __attribute__ ((aligned(4)))= \
-{ \
-.len = sizeof((utf16_t[]) __VA_ARGS__ ), \
-.type = USB_STRING_DESCRIPTOR, \
-.name = __VA_ARGS__ \
-} \
+#define STATIC_CONST_STRING_DESC( _name, ... )                  \
+EFM32_PACK_START( 1 )                                           \
+typedef struct                                                  \
+{                                                               \
+  uint8_t  len;                                                 \
+  uint8_t  type;                                                \
+  char16_t name[ 1 + sizeof( (char16_t[]){__VA_ARGS__} ) / 2];  \
+} __attribute__ ((packed)) _##_name;                            \
+EFM32_PACK_END()                                                \
+EFM32_ALIGN( 4 )                                                \
+EFM32_PACK_START( 1 )                                           \
+static const _##_name _name __attribute__ ((aligned(4)))=       \
+{                                                               \
+  .len  = sizeof( _##_name ) - 2,                               \
+  .type = USB_STRING_DESCRIPTOR,                                \
+  .name = {__VA_ARGS__},                                        \
+  .name[ ( ( sizeof( _##_name ) - 2 ) / 2 ) - 1 ] = '\0'        \
+}                                                               \
 EFM32_PACK_END()
 
 /** Macro for creating USB compliant language string descriptors.
  *  @n Example: STATIC_CONST_STRING_DESC_LANGID( langID, 0x04, 0x09 );
  */
-#define STATIC_CONST_STRING_DESC_LANGID( name, x, y )\
-typedef struct                      \
-{                                   \
-  uint8_t len;                      \
-  uint8_t type;                     \
-  uint8_t name[ 2 ];                \
-} __attribute__ ((packed)) _##name; \
-EFM32_ALIGN( 4 )                    \
-EFM32_PACK_START( 1 )               \
-static const _##name name __attribute__ ((aligned(4)))= \
-{                                   \
-  .len = 4,                         \
-  .type = USB_STRING_DESCRIPTOR,    \
-  .name = { y, x }                  \
-}                                   \
+#define STATIC_CONST_STRING_DESC_LANGID( _name, x, y )      \
+EFM32_PACK_START( 1 )                                       \
+typedef struct                                              \
+{                                                           \
+  uint8_t len;                                              \
+  uint8_t type;                                             \
+  uint8_t name[ 2 ];                                        \
+} __attribute__ ((packed)) _##_name;                        \
+EFM32_PACK_END()                                            \
+EFM32_ALIGN( 4 )                                            \
+EFM32_PACK_START( 1 )                                       \
+static const _##_name _name __attribute__ ((aligned(4)))=   \
+{                                                           \
+  .len = 4,                                                 \
+  .type = USB_STRING_DESCRIPTOR,                            \
+  .name = { y, x }                                          \
+}                                                           \
 EFM32_PACK_END()
 
 /** Macro for creating WORD (4 byte) aligned uint8_t array with size which
@@ -269,7 +267,7 @@ EFM32_PACK_END()
 #define        UBUF( x, y ) EFM32_ALIGN( 4 )        uint8_t x[((y)+3)&~3]
 #define STATIC_UBUF( x, y ) EFM32_ALIGN( 4 ) static uint8_t x[((y)+3)&~3]
 #else
-#define        UBUF( x, y )        uint8_t x[((y)+3)&~3] __attribute__ ((aligned(4)))
+#define        UBUF( x, y ) uint8_t x[((y)+3)&~3] __attribute__ ((aligned(4)))
 
 /** Macro for creating WORD (4 byte) aligned static uint8_t arrays with size which
  *  is a multiple of WORD size.
@@ -480,7 +478,7 @@ typedef struct
 {
   uint8_t len;                                  /**< Size of this descriptor in bytes.                 */
   uint8_t type;                                 /**< Constant STRING Descriptor Type.                  */
-  wchar_t name[];                               /**< The string encoded with UTF-16LE UNICODE charset. */
+  char16_t name[];                              /**< The string encoded with UTF-16LE UNICODE charset. */
 } __attribute__ ((packed)) USB_StringDescriptor_TypeDef;
 EFM32_PACK_END()
 
@@ -548,12 +546,8 @@ int  USB_PRINTF( const char *format, ... );
 /* Hardware constraint, do not change. */
 #define MAX_NUM_HOSTCHANNELS  14
 
-#if !defined( USB_SLAVEMODE )
-/* In DMA mode the DMA engine use one FIFO ram word for each host channel. */
+/* The DMA engine use one FIFO ram word for each host channel. */
 #define MAX_FIFO_SIZE_INWORDS (512-MAX_NUM_HOSTCHANNELS) /* Unit is 4 bytes */
-#else
-#define MAX_FIFO_SIZE_INWORDS 512             /* Unit is 4 bytes            */
-#endif
 
 #if defined ( USER_PUTCHAR )
   void USB_Puts( const char *p );

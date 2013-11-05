@@ -2,7 +2,7 @@
  * @file
  * @brief USB protocol stack library, internal type definitions.
  * @author Energy Micro AS
- * @version 3.0.2
+ * @version 3.20.2
  *******************************************************************************
  * @section License
  * <b>(C) Copyright 2012 Energy Micro AS, http://www.energymicro.com</b>
@@ -157,9 +157,7 @@ typedef struct
   uint16_t                    mask;
   uint32_t                    remaining;
   uint32_t                    xferred;
-#if !defined( USB_SLAVEMODE )
   uint32_t                    hwXferSize;
-#endif
   uint32_t                    fifoSize;
   USBD_EpState_TypeDef        state;
   USB_XferCompleteCb_TypeDef  xferCompleteCb;
@@ -168,11 +166,7 @@ typedef struct
 typedef struct
 {
   USB_Setup_TypeDef                     *setup;
-#if !defined( USB_SLAVEMODE )
   USB_Setup_TypeDef                     setupPkt[3];
-#else
-  USB_Setup_TypeDef                     setupPkt[1];
-#endif
   uint8_t                               configurationValue; /* Must be DWORD aligned */
   bool                                  remoteWakeupEnabled;
   uint8_t                               numberOfStrings;
@@ -211,17 +205,9 @@ typedef struct
   int                     errorCnt;
   uint32_t                remaining;
   uint32_t                xferred;
-#if defined( USB_SLAVEMODE )
-  uint32_t                pending;
-#else
   uint32_t                hwXferSize;
-#endif
   uint8_t                 status;
   bool                    idle;
-#if defined( USB_SLAVEMODE )
-  bool                    txNpFempIntOn;
-  bool                    txPFempIntOn;
-#endif
   USBH_Ep_TypeDef         *ep;
 } USBH_Hc_TypeDef;
 #endif /* defined( USB_HOST ) */

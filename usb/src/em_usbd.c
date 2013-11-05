@@ -2,7 +2,7 @@
  * @file
  * @brief USB protocol stack library, device API.
  * @author Energy Micro AS
- * @version 3.0.2
+ * @version 3.20.2
  ******************************************************************************
  * @section License
  * <b>(C) Copyright 2012 Energy Micro AS, http://www.energymicro.com</b>
@@ -490,14 +490,12 @@ int USBD_Read( int epAddr, void *data, int byteCount,
     return USB_STATUS_ILLEGAL;
   }
 
-#if !defined( USB_SLAVEMODE )
   if ( (uint32_t)data & 3 )
   {
     DEBUG_USB_API_PUTS( "\nUSBD_Read(), Misaligned data buffer" );
     EFM_ASSERT( false );
     return USB_STATUS_ILLEGAL;
   }
-#endif
 
   INT_Disable();
   if ( USBDHAL_EpIsStalled( ep ) )
@@ -765,14 +763,12 @@ int USBD_Write( int epAddr, void *data, int byteCount,
     return USB_STATUS_ILLEGAL;
   }
 
-#if !defined( USB_SLAVEMODE )
   if ( (uint32_t)data & 3 )
   {
     DEBUG_USB_API_PUTS( "\nUSBD_Write(), Misaligned data buffer" );
     EFM_ASSERT( false );
     return USB_STATUS_ILLEGAL;
   }
-#endif
 
   INT_Disable();
   if ( USBDHAL_EpIsStalled( ep ) )
@@ -859,8 +855,9 @@ int USBD_Write( int epAddr, void *data, int byteCount,
 
   All functions defined in the API can be called from within interrupt handlers.
 
-  The USB stack use TIMER0 to keep track of time. Your application must not use
-  this timer.
+  The USB stack use a hardware timer to keep track of time. TIMER0 is the
+  default choice, refer to @ref usb_device_conf for other possibilities.
+  Your application must not use the selected timer.
 
   <b>Pitfalls:</b>@n
     The USB peripheral will fill your receive buffers in quantities of WORD's
@@ -874,10 +871,6 @@ int USBD_Write( int epAddr, void *data, int byteCount,
     statically allocated because @htmlonly USBD_Write() @endhtmlonly only
     initiates the transfer. When the host decide to actually perform the
     transfer, your data must be available.
-
-    To handle USB strings correctly, wide characterset is used.
-    On gcc use flags -fwide-exec-charset=UTF-16LE -fshort-wchar for the compiler,
-    and -Wl,--no-wchar-size-warning for the linker.
 
   @n @ref USBD_Init() @n
     This function is called to register your device and all its properties with
@@ -1129,9 +1122,9 @@ else
 
 int main( void )
 {
-  DVK_init();                 // Initialize DVK board register access
+  BSP_Init(BSP_INIT_DEFAULT); // Initialize DK board register access
   CMU_ClockSelectSet( cmuClock_HF, cmuSelect_HFXO );
-  DVK_setLEDs( 0 );           // Turn off all LED's
+  BSP_LedsSet(0);             // Turn off all LED's
 
   ConsoleDebugInit();         // Initialize UART for debug diagnostics
 
@@ -1223,10 +1216,15 @@ static const uint8_t configDesc[] __attribute__ ((aligned(4)))=
   0,                              // iInterface
 };
 
-STATIC_CONST_STRING_DESC_LANGID( langID, 0x04, 0x09         );
-STATIC_CONST_STRING_DESC( iManufacturer, L"Energy Micro AS" );
-STATIC_CONST_STRING_DESC( iProduct     , L"Vendor Unique LED Device"   );
-STATIC_CONST_STRING_DESC( iSerialNumber, L"000000001234"    );
+STATIC_CONST_STRING_DESC_LANGID( langID, 0x04, 0x09 );
+STATIC_CONST_STRING_DESC( iManufacturer, 'E','n','e','r','g','y',' ',       \
+                                         'M','i','c','r','o',' ','A','S' );
+STATIC_CONST_STRING_DESC( iProduct     , 'V','e','n','d','o','r',' ',       \
+                                         'U','n','i','q','u','e',' ',       \
+                                         'L','E','D',' ',                   \
+                                         'D','e','v','i','c','e' );
+STATIC_CONST_STRING_DESC( iSerialNumber, '0','0','0','0','0','0',           \
+                                         '0','0','1','2','3','4' );
 
 static const void * const strings[] =
 {
@@ -1284,7 +1282,7 @@ static int SetupCmd( const USB_Setup_TypeDef *setup )
     {
       case VND_GET_LEDS:
       // ********************
-        *pBuffer = DVK_getLEDs() & 0x1F;
+        *pBuffer = BSP_LedsGet() & 0x1F;
         retVal = USBD_Write( 0, pBuffer, setup->wLength, NULL );
         break;
 
@@ -1299,7 +1297,7 @@ static int SetupCmd( const USB_Setup_TypeDef *setup )
         {
           leds &= ~( LED0 << setup->wIndex );
         }
-        DVK_setLEDs( leds );
+        BSP_LedsSet( leds );
         retVal = USB_STATUS_OK;
         break;
     }

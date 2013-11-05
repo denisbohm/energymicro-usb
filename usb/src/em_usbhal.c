@@ -2,7 +2,7 @@
  * @file
  * @brief USB protocol stack library, low level USB peripheral access.
  * @author Energy Micro AS
- * @version 3.0.2
+ * @version 3.20.2
  ******************************************************************************
  * @section License
  * <b>(C) Copyright 2012 Energy Micro AS, http://www.energymicro.com</b>
@@ -49,6 +49,8 @@
 #include "em_gpio.h"
 
 /** @cond DO_NOT_INCLUDE_WITH_DOXYGEN */
+
+#define EPABORT_BREAK_LOOP_COUNT 15000              /* Approx. 100 ms */
 
 /* NOTE: The sequence of error message strings must agree with the    */
 /*       definition of USB_Status_TypeDef enum.                       */
@@ -221,10 +223,8 @@ USB_Status_TypeDef USBDHAL_CoreInit( uint32_t totalRxFifoSize,
   /* Set periodic frame interval to 80% */
   USB->DCFG &= ~_USB_DCFG_PERFRINT_MASK;
 
-#if !defined( USB_SLAVEMODE )
   USB->GAHBCFG = ( USB->GAHBCFG & ~_USB_GAHBCFG_HBSTLEN_MASK ) |
                  USB_GAHBCFG_DMAEN | USB_GAHBCFG_HBSTLEN_INCR;
-#endif
 
   /* Set Rx FIFO size */
   USB->GRXFSIZ = ( totalRxFifoSize << _USB_GRXFSIZ_RXFDEP_SHIFT ) &
@@ -286,7 +286,6 @@ USB_Status_TypeDef USBDHAL_CoreInit( uint32_t totalRxFifoSize,
     USB_DOUTEPS[ i ].INT  = 0xFFFFFFFF;
   }
 
-#if ( USB_PWRSAVE_MODE & USB_PWRSAVE_MODE_ONVBUSOFF )
   /* Enable VREGO sense. */
   USB->CTRL |= USB_CTRL_VREGOSEN;
   USB->IFC   = USB_IFC_VREGOSH | USB_IFC_VREGOSL;
@@ -296,7 +295,6 @@ USB_Status_TypeDef USBDHAL_CoreInit( uint32_t totalRxFifoSize,
     USB->IFS = USB_IFS_VREGOSH;
   else
     USB->IFS = USB_IFS_VREGOSL;
-#endif
 
   return USB_STATUS_OK;
 }
@@ -340,6 +338,8 @@ void USBDHAL_AbortEpIn( USBD_Ep_TypeDef *ep )
 
 void USBDHAL_AbortEpOut( USBD_Ep_TypeDef *ep )
 {
+  int cnt;
+
   /* Clear epdis INT's */
   USB_DOUTEPS[ ep->num ].INT |= USB_DOEP_INT_EPDISBLD;
 
@@ -351,15 +351,10 @@ void USBDHAL_AbortEpOut( USBD_Ep_TypeDef *ep )
   USB->DCTL = ( USB->DCTL & ~DCTL_WO_BITMASK ) | USB_DCTL_SGOUTNAK;
 
   /* Wait for goutnakeff */
-  while ( !( USB->GINTSTS & USB_GINTSTS_GOUTNAKEFF ) )
+  cnt = EPABORT_BREAK_LOOP_COUNT;
+  while ( !( USB->GINTSTS & USB_GINTSTS_GOUTNAKEFF ) && cnt )
   {
-#if defined( USB_SLAVEMODE )
-    /* Check if Rx FIFO filled with global OUT NAK status */
-    if ( USB->GINTSTS & USB_GINTSTS_RXFLVL )
-    {
-      USB->GRXSTSP;                           /* Pop status from top of FIFO */
-    }
-#endif
+    cnt--;
   }
 
   USB->GINTMSK &= ~USB_GINTMSK_GOUTNAKEFFMSK; /* Disable GOUTNAKEFF int  */
@@ -370,7 +365,11 @@ void USBDHAL_AbortEpOut( USBD_Ep_TypeDef *ep )
   USBDHAL_SetEPDISNAK( ep );                  /* Disable ep */
 
   /* Wait for epdis INT */
-  while ( !( USBDHAL_GetOutEpInts( ep ) & USB_DOEP_INT_EPDISBLD ) ) {}
+  cnt = EPABORT_BREAK_LOOP_COUNT;
+  while ( !( USBDHAL_GetOutEpInts( ep ) & USB_DOEP_INT_EPDISBLD ) && cnt )
+  {
+    cnt--;
+  }
 
   USB_DOUTEPS[ ep->num ].INT = USB_DOEP_INT_EPDISBLD;
   USB->DOEPMSK &= ~USB_DOEPMSK_EPDISBLDMSK;     /* Disable EPDIS interrupt */
@@ -386,7 +385,7 @@ void USBDHAL_AbortEpOut( USBD_Ep_TypeDef *ep )
 
 void USBDHAL_AbortAllEps( void )
 {
-  int i;
+  int i, cnt;
   USBD_Ep_TypeDef *ep;
   uint16_t im, om, inmask=0, outmask=0;
 
@@ -440,17 +439,11 @@ void USBDHAL_AbortAllEps( void )
     USB->DCTL = ( USB->DCTL & ~DCTL_WO_BITMASK ) | USB_DCTL_SGOUTNAK;
 
     /* Wait for goutnakeff */
-    while ( !( USB->GINTSTS & USB_GINTSTS_GOUTNAKEFF ) )
+    cnt = EPABORT_BREAK_LOOP_COUNT;
+    while ( !( USB->GINTSTS & USB_GINTSTS_GOUTNAKEFF ) && cnt )
     {
-#if defined( USB_SLAVEMODE )
-      /* Check if Rx FIFO filled with global OUT NAK status */
-      if ( USB->GINTSTS & USB_GINTSTS_RXFLVL )
-      {
-        USB->GRXSTSP;                       /* Pop status from top of FIFO */
-      }
-#endif
+      cnt--;
     }
-
     USB->GINTMSK &= ~USB_GINTMSK_GOUTNAKEFFMSK; /* Disable GOUTNAKEFF int  */
     USB->DOEPMSK |= USB_DOEPMSK_EPDISBLDMSK;    /* Enable EPDIS interrupt  */
   }
@@ -458,7 +451,8 @@ void USBDHAL_AbortAllEps( void )
   if ( inmask )
   {
     /* Wait for inepnakeff INT on all IN ep's */
-    im = inmask;
+    im  = inmask;
+    cnt = EPABORT_BREAK_LOOP_COUNT;
     do
     {
       for ( i = 1; i <= NUM_EP_USED; i++ )
@@ -473,7 +467,8 @@ void USBDHAL_AbortAllEps( void )
           }
         }
       }
-    } while ( im );
+      cnt--;
+    } while ( im && cnt );
     USB->DIEPMSK &= ~USB_DIEPMSK_INEPNAKEFFMSK;
   }
 
@@ -490,8 +485,9 @@ void USBDHAL_AbortAllEps( void )
   }
 
   /* Wait for epdis INT */
-  im = inmask;
-  om = outmask;
+  im  = inmask;
+  om  = outmask;
+  cnt = EPABORT_BREAK_LOOP_COUNT;
   do
   {
     for ( i = 1; i <= NUM_EP_USED; i++ )
@@ -515,7 +511,8 @@ void USBDHAL_AbortAllEps( void )
         }
       }
     }
-  } while ( im || om );
+    cnt--;
+  } while ( ( im || om ) && cnt );
 
   if ( inmask )
   {
@@ -539,7 +536,10 @@ void USBDHAL_AbortAllTransfers( USB_Status_TypeDef reason )
   USBD_Ep_TypeDef *ep;
   USB_XferCompleteCb_TypeDef callback;
 
-  USBDHAL_AbortAllEps();
+  if ( reason != USB_STATUS_DEVICE_RESET )
+  {
+    USBDHAL_AbortAllEps();
+  }
 
   for ( i = 1; i <= NUM_EP_USED; i++ )
   {
@@ -604,10 +604,8 @@ USB_Status_TypeDef USBHHAL_CoreInit( uint32_t rxFifoSize,
               ( 1 << _USB_HCFG_FSLSPCLKSEL_SHIFT        ) |
               ( USB_HCFG_FSLSSUPP                       );
 
-#if !defined( USB_SLAVEMODE )
   USB->GAHBCFG = ( USB->GAHBCFG & ~_USB_GAHBCFG_HBSTLEN_MASK ) |
                  USB_GAHBCFG_DMAEN | USB_GAHBCFG_HBSTLEN_INCR;
-#endif
 
   /* Set Rx FIFO size */
   USB->GRXFSIZ = ( rxFifoSize << _USB_GRXFSIZ_RXFDEP_SHIFT ) &
@@ -643,10 +641,6 @@ USB_Status_TypeDef USBHHAL_CoreInit( uint32_t rxFifoSize,
     USB->HC[ i ].CHAR |= USB_HC_CHAR_CHDIS | USB_HC_CHAR_CHENA;
     do
     {
-#if defined( USB_SLAVEMODE )
-      USB->GRXSTSP;
-      __NOP(); __NOP(); __NOP(); __NOP(); __NOP(); __NOP();
-#endif
       __NOP(); __NOP(); __NOP(); __NOP(); __NOP(); __NOP();
     }
     while ( USB->HC[ i ].CHAR & USB_HC_CHAR_CHENA );
@@ -663,34 +657,9 @@ USB_Status_TypeDef USBHHAL_CoreInit( uint32_t rxFifoSize,
   return USB_STATUS_OK;
 }
 
-void USBHHAL_HCHalt( int hcnum, uint32_t hcchar, uint32_t eptype )
+void USBHHAL_HCHalt( int hcnum, uint32_t hcchar )
 {
-#if !defined( USB_SLAVEMODE )
-  (void)eptype;
-
-#else
-  USB->HC[ hcnum ].INTMSK |= USB_HC_INT_CHHLTD;
-#endif
-
   hcchar |= USB_HC_CHAR_CHENA | USB_HC_CHAR_CHDIS;
-
-#if defined( USB_SLAVEMODE )
-  /* Check for space in the request queue to issue the halt. */
-  if ( eptype == HCCHAR_EPTYPE_CTRL || eptype == HCCHAR_EPTYPE_BULK )
-  {
-    if ( ( USB->GNPTXSTS & _USB_GNPTXSTS_NPTXQSPCAVAIL_MASK ) == 0 )
-    {
-      hcchar &= ~USB_HC_CHAR_CHENA;
-    }
-  }
-  else
-  {
-    if ( ( USB->HPTXSTS & _USB_HPTXSTS_PTXQSPCAVAIL_MASK ) == 0)
-    {
-      hcchar &= ~USB_HC_CHAR_CHENA;
-    }
-  }
-#endif
   USB->HC[ hcnum ].CHAR = hcchar;
 }
 
@@ -705,34 +674,8 @@ void USBHHAL_HCInit( int hcnum )
   {
     case USB_EPTYPE_CTRL:
     case USB_EPTYPE_BULK:
-                      USB->HC[ hcnum ].INTMSK =
-#if !defined( USB_SLAVEMODE )
-                      USB_HC_INT_CHHLTD;
-#else
-                      USB_HC_INT_XFERCOMPL                   |
-                      USB_HC_INT_STALL                       |
-                      USB_HC_INT_XACTERR                     |
-                      USB_HC_INT_NAK                         |
-                      ( ep->in ? 0 : USB_HC_INT_ACK        ) |
-                      ( ep->in ? USB_HC_INT_DATATGLERR : 0 ) |
-                      ( ep->in ? USB_HC_INT_BBLERR     : 0 );
-#endif
-      break;
-
     case USB_EPTYPE_INTR:
-      USB->HC[ hcnum ].INTMSK =
-#if !defined( USB_SLAVEMODE )
-                      USB_HC_INT_CHHLTD;
-#else
-                      USB_HC_INT_XFERCOMPL               |
-                      USB_HC_INT_STALL                   |
-                      USB_HC_INT_XACTERR                 |
-                      USB_HC_INT_DATATGLERR              |
-                      USB_HC_INT_NAK                     |
-                      ( ep->in ? 0 : USB_HC_INT_ACK )    |
-                      USB_HC_INT_FRMOVRUN                |
-                      ( ep->in ? USB_HC_INT_BBLERR : 0 );
-#endif
+      USB->HC[ hcnum ].INTMSK = USB_HC_INT_CHHLTD;
       break;
   }
 
@@ -759,9 +702,6 @@ void USBHHAL_HCStart( int hcnum )
   hc = &hcs[ hcnum ];
   hc->status = 0;
   hc->idle = false;
-#if defined( USB_SLAVEMODE )
-  hc->pending = 0;
-#endif
 
   if ( hc->remaining > 0 )
   {
@@ -782,9 +722,7 @@ void USBHHAL_HCStart( int hcnum )
   }
 
   /* Initialize the HCTSIZn register */
-#if !defined( USB_SLAVEMODE )
   hc->hwXferSize = len;
-#endif
   USB->HC[ hcnum ].TSIZ =
           ( ( len             << _USB_HC_TSIZ_XFERSIZE_SHIFT ) &
                                  _USB_HC_TSIZ_XFERSIZE_MASK       ) |
@@ -798,21 +736,6 @@ void USBHHAL_HCStart( int hcnum )
   USBHHAL_HCActivate( hcnum,
                       USB->HC[ hcnum ].CHAR,
                       hc->ep->type == USB_EPTYPE_INTR );
-
-#if defined( USB_SLAVEMODE )
-  if ( !hc->ep->in )
-  {
-    if ( hc->ep->type == USB_EPTYPE_INTR )
-    {
-      USBHHAL_FillFifo( hcnum, USB->HPTXSTS, hc );
-    }
-    else
-    {
-      USBHHAL_FillFifo( hcnum, USB->GNPTXSTS, hc );
-    }
-  }
-#endif
-
 }
 #endif /* defined( USB_HOST ) */
 

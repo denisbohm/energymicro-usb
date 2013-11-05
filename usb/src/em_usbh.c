@@ -2,7 +2,7 @@
  * @file
  * @brief USB protocol stack library API for EFM32.
  * @author Energy Micro AS
- * @version 3.0.2
+ * @version 3.20.2
  *******************************************************************************
  * @section License
  * <b>(C) Copyright 2012 Energy Micro AS, http://www.energymicro.com</b>
@@ -44,8 +44,6 @@
 #if ( USB_VBUSOVRCUR_PORT != USB_VBUSOVRCUR_PORT_NONE )
 #include "em_gpio.h"
 #endif
-
-#include <string.h>
 
 /** @cond DO_NOT_INCLUDE_WITH_DOXYGEN */
 
@@ -108,7 +106,7 @@ static void Timeout( int hcnum )
 
   if ( ep->type != USB_EPTYPE_INTR )
   {
-    USBHHAL_HCHalt( hcnum, hcchar, hcchar & _USB_HC_CHAR_EPTYPE_MASK );
+    USBHHAL_HCHalt( hcnum, hcchar );
     hc->status |= HCS_TIMEOUT;
     ep->timeout = 0;
     if ( !hc->idle )
@@ -136,7 +134,7 @@ static void Timeout( int hcnum )
       }
       else
       {
-        USBHHAL_HCHalt( hcnum, hcchar, _USB_HC_CHAR_EPTYPE_INT );
+        USBHHAL_HCHalt( hcnum, hcchar );
         hc->status |= HCS_TIMEOUT;
         if ( !hc->idle )
           USBHEP_TransferDone( hc->ep, USB_STATUS_TIMEOUT );
@@ -277,14 +275,12 @@ int USBH_ControlMsg( USBH_Ep_TypeDef *ep,
     return USB_STATUS_ILLEGAL;
   }
 
-#if !defined( USB_SLAVEMODE )
   if ( (uint32_t)data & 3 )
   {
     DEBUG_USB_API_PUTS( "\nUSBH_ControlMsg(), Misaligned data buffer" );
     EFM_ASSERT( false );
     return USB_STATUS_ILLEGAL;
   }
-#endif
 
   INT_Disable();
   if ( ep->state != H_EP_IDLE )
@@ -825,7 +821,7 @@ int USBH_GetStringB( USBH_Device_TypeDef *device, uint8_t *buf, int bufLen,
     sd = (USB_StringDescriptor_TypeDef*)buf;
     if ( sd->len )
     {
-      sd->name[ (sd->len - 2) / sizeof( wchar_t ) ] = L'\0';
+      sd->name[ (sd->len - 2) / sizeof( char16_t ) ] = '\0';
     }
   }
   return retVal;
@@ -1705,14 +1701,12 @@ int USBH_Read( USBH_Ep_TypeDef *ep, void *data, int byteCount, int timeout,
     return USB_STATUS_ILLEGAL;
   }
 
-#if !defined( USB_SLAVEMODE )
   if ( (uint32_t)data & 3 )
   {
     DEBUG_USB_API_PUTS( "\nUSBH_Read(), Misaligned data buffer" );
     EFM_ASSERT( false );
     return USB_STATUS_ILLEGAL;
   }
-#endif
 
   INT_Disable();
   if ( ep->state != H_EP_IDLE )
@@ -2325,14 +2319,12 @@ int USBH_Write( USBH_Ep_TypeDef *ep, void *data, int byteCount,
     return USB_STATUS_ILLEGAL;
   }
 
-#if !defined( USB_SLAVEMODE )
   if ( (uint32_t)data & 3 )
   {
     DEBUG_USB_API_PUTS( "\nUSBH_Write(), Misaligned data buffer" );
     EFM_ASSERT( false );
     return USB_STATUS_ILLEGAL;
   }
-#endif
 
   INT_Disable();
   if ( ep->state != H_EP_IDLE )
@@ -2568,8 +2560,9 @@ for (;;)
     are disabled. Note that all API callback functions are called from within
     the USB peripheral interrupt handler with interrupts disabled.
 
-    The USB stack use TIMER0 to keep track of time. Your application must not use
-    this timer.
+    The USB stack use a hardware timer to keep track of time. TIMER0 is the
+    default choice, refer to @ref usb_host_conf for other possibilities.
+    Your application must not use the selected timer.
 
     <b>Pitfalls:</b>@n
       An USB peripheral will fill host receive buffers in quantities of WORD's
@@ -2584,10 +2577,6 @@ for (;;)
       statically allocated because these functions do not have their own buffers.
       The data in the transmit buffers must be valid until the transfer completes,
       times out or fails.
-
-      To handle USB strings correctly, the UTF-16LE wide characterset is used.
-      On gcc use flags -fwide-exec-charset=UTF-16LE -fshort-wchar for the compiler,
-      and -Wl,--no-wchar-size-warning for the linker.
 
   @n @subsection usb_host_init Top level control functions
     @ref USBH_Init() @n

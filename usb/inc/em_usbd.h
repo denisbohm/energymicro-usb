@@ -2,7 +2,7 @@
  * @file
  * @brief USB protocol stack library API for EFM32.
  * @author Energy Micro AS
- * @version 3.0.2
+ * @version 3.20.2
  *******************************************************************************
  * @section License
  * <b>(C) Copyright 2012 Energy Micro AS, http://www.energymicro.com</b>
@@ -109,19 +109,12 @@ __STATIC_INLINE void USBD_ArmEp0( USBD_Ep_TypeDef *ep )
       ep->zlp = 1;
     }
 
-#if !defined( USB_SLAVEMODE )
     USBDHAL_SetEp0InDmaPtr( ep->buf );
-#endif
-
     USBDHAL_StartEp0In( EFM32_MIN( ep->remaining, ep->packetSize ) );
   }
   else
   {
-
-#if !defined( USB_SLAVEMODE )
     USBDHAL_SetEp0OutDmaPtr( ep->buf );
-#endif
-
     USBDHAL_StartEp0Out( ep->packetSize );
   }
 }
